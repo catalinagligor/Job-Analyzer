@@ -10,6 +10,9 @@ import instructor
 from groq import Groq
 from dotenv import load_dotenv
 
+from typing import List, Optional, Literal
+from pydantic import BaseModel, Field
+
 # ==============================================================================
 # 1. SETUP & SECURITATE
 # ==============================================================================
@@ -48,6 +51,20 @@ with st.sidebar:
 # ==============================================================================
 # 2. DATA MODELS (PYDANTIC SCHEMAS)
 # ==============================================================================
+class SalaryRange(BaseModel):
+    min: int = Field(..., ge=0, description="Salariul minim")
+    max: int = Field(..., ge=0, description="Salariul maxim")
+    currency: str = Field(..., description="Moneda (ex: RON, USD, EUR, CHF)")
+
+class Location(BaseModel):
+    city: str = Field(..., description="Oraș")
+    country: str = Field(..., description="Țară")
+    is_remote: bool = Field(..., description="True dacă jobul este remote/hibrid")
+
+class RedFlag(BaseModel):
+    severity: Literal["low", "medium", "high"] = Field(..., description="Severitatea semnalului")
+    category: Literal["toxicity", "vague", "unrealistic"] = Field(..., description="Categoria semnalului")
+    message: str = Field(..., description="Descrierea semnalului de alarmă")
 
 class JobAnalysis(BaseModel):
     role_title: str = Field(..., description="Titlul jobului standardizat")
@@ -55,9 +72,14 @@ class JobAnalysis(BaseModel):
     seniority: Literal["Intern", "Junior", "Mid", "Senior", "Lead", "Architect"] = Field(..., description="Nivelul de experiență dedus")
     match_score: int = Field(..., ge=0, le=100, description="Scor 0-100: Calitatea descrierii jobului")
     tech_stack: List[str] = Field(..., description="Listă cu tehnologii specifice (ex: Python, AWS, React)")
-    red_flags: List[str] = Field(..., description="Lista de semnale de alarmă (toxicitate, stres, vaguitate)")
+    
+    red_flags: List[RedFlag] = Field(..., description="Lista de semnale de alarma")
+
     summary: str = Field(..., description="Un rezumat scurt al rolului (max 2 fraze) în limba română")
-    is_remote: bool = Field(False, description="True dacă jobul este remote sau hibrid")
+
+    salary_range: Optional[SalaryRange] = Field(None, description="Interval salarial dacă este menționat")
+
+    location: Location = Field(..., description="Locația jobului")
 
 # ==============================================================================
 # 3. UTILS - SCRAPER (Colectare Date)
@@ -107,6 +129,9 @@ def analyze_job_with_ai(text: str) -> JobAnalysis:
                 "content": (
                     "Ești un Recruiter Expert în IT. Analizează textul jobului cu obiectivitate. "
                     "Identifică tehnologiile și potențialele probleme (red flags). "
+                    "Pentru salary_range: daca nu exista salariul, afiseaza null"
+                    "Pentru location: alege city și country din context; dacă nu e clar, pune 'Necunoscut'. "
+                    "Pentru red_flags: întoarce o listă de obiecte cu severity (low/medium/high), category (toxicity/vague/unrealistic) și message scurt."
                     "Răspunde strict în formatul cerut."
                 )
             },
@@ -158,10 +183,14 @@ with tab1:
 
                     # Detalii
                     c1, c2, c3 = st.columns(3)
-                    c1.info(f"**Remote:** {'Da' if data.is_remote else 'Nu'}")
+                    c1.info(f"**Remote:** {'Da' if data.location.is_remote else 'Nu'}")
                     c2.success(f"**Tehnologii:** {len(data.tech_stack)}")
                     c3.error(f"**Red Flags:** {len(data.red_flags)}")
 
+
+                    if not data.location.is_remote:
+                        st.markdown( f"📍 **Locație:** {data.location.city}, {data.location.country}")
+                        
                     st.markdown(f"**📝 Rezumat:** {data.summary}")
                     st.markdown("#### 🛠️ Tech Stack")
                     st.write(", ".join([f"`{tech}`" for tech in data.tech_stack]))
@@ -169,7 +198,7 @@ with tab1:
                     if data.red_flags:
                         st.markdown("#### 🚩 Avertismente")
                         for flag in data.red_flags:
-                            st.warning(f"⚠️ {flag}")
+                           st.warning(f"**{flag.severity.upper()} / {flag.category}** — {flag.message}")
 
                 except Exception as e:
                     st.error(f"Eroare AI: {str(e)}")
@@ -197,11 +226,13 @@ with tab2:
                     try:
                         res = analyze_job_with_ai(text)
                         results.append({
-                            "Role": res.role_title,
-                            "Company": res.company_name,
-                            "Seniority": res.seniority,
-                            "Tech": res.tech_stack,
-                            "Score": res.match_score
+                         "Role": res.role_title,
+                         "Company": res.company_name,
+                         "Seniority": res.seniority,
+                         "Remote": res.location.is_remote,
+                         "TechCount": len(res.tech_stack),
+                         "RedFlags": len(res.red_flags),
+                         "Score": res.match_score
                         })
                     except:
                         pass # Continuăm chiar dacă unul crapă
